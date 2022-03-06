@@ -67,12 +67,17 @@ Material:
     - _Mode: 0
     - _OcclusionStrength: 1
     - _Parallax: 0.02
+    - _Power: 7.61
+    - _PropertyName: 100
     - _SmoothnessTextureChannel: 0
     - _SpecularHighlights: 1
     - _SrcBlend: 1
     - _UVSec: 0
     - _ZWrite: 1
     m_Colors:
+    - _BackgroundColor: {r: 0.9339623, g: 0.10044494, b: 0.31054723, a: 1}
+    - _BackgroundlColor: {r: 0.9245283, g: 0.8931292, b: 0.8931292, a: 1}
     - _Color: {r: 1, g: 1, b: 1, a: 1}
     - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
+    - _MandelColor: {r: 0.20392154, g: 0.32421327, b: 0.9137255, a: 1}
   m_BuildTextureStacks: []

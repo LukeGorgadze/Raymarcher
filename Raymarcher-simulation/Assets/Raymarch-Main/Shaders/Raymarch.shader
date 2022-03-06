@@ -3,7 +3,10 @@ Shader "Unlit/Raymarch"
     Properties
     {
         _MainTex ("Texture", 2D) = "white" {}
-        _Color ("Color", Color) = (1, 1, 1, 1)
+        _MandelColor ("MandelColor", Color) = (1, 1, 1, 1)
+        _BackgroundColor ("BackgroundColor", Color) = (1, 1, 1, 1)
+        [PowerSlider(10.0)] _Power ("Power", Range (0.01, 20)) = 1.0
+
     }
     SubShader
     {
@@ -20,10 +23,17 @@ Shader "Unlit/Raymarch"
 
             #include "UnityCG.cginc"
 
-            #define MAX_STEPS 400
-            #define MAX_DIST 500
-            #define SURF_DIST 1e-3
+            #define MAX_STEPS 200
+            #define MIN_DIST .001
+            #define MAX_DIST 30.
+            #define PRECISION .0008
 
+            
+            sampler2D _MainTex;
+            float4 _MainTex_ST;
+            float4 _MandelColor;
+            float4 _BackgroundColor;
+            float _Power;
             struct appdata
             {
                 float4 vertex : POSITION;
@@ -38,9 +48,6 @@ Shader "Unlit/Raymarch"
                 float3 hitPos : TEXCOORD2;
             };
 
-            sampler2D _MainTex;
-            float4 _MainTex_ST;
-            float4 _Color;
 
             v2f vert (appdata v)
             {
@@ -51,102 +58,149 @@ Shader "Unlit/Raymarch"
                 o.hitPos = mul(unity_ObjectToWorld,v.vertex);
                 return o;
             }
-            float GetDist(float3 w)
-            {
-                
-                //float d = length(p) - .5;
-                //d = length(float2(length(p.xz) - .5, p.y)) - .1;
-                //float3 q = abs(p) - .5;
-                //return length(max(q,0.0)) + min(max(q.x,max(q.y,q.z)),0.0) - .1;
-                // extract polar coordinates
-                float wr = sqrt(dot(w,w));
-                float wo = acos(w.y/wr);
-                float wi = atan2(w.x,w.z);
 
-                // scale and rotate the point
-                wr = pow( wr, 8.0 );
-                wo = wo * 8.0;
-                wi = wi * 8.0;
-
-                // convert back to cartesian coordinates
-                w.x = wr * sin(wo)*sin(wi);
-                w.y = wr * cos(wo);
-                w.z = wr * sin(wo)*cos(wi);
-
-                return w / 1;
+            float3x3 rotateX(float theta){
+                float c=cos(theta);
+                float s=sin(theta);
+                return float3x3(
+                float3(1,0,0),
+                float3(0,c,-s),
+                float3(0,s,c)
+                );
             }
-            float mandelbulb (float3 pos, in float n)
+
+            float3x3 rotateY(float theta){
+                float c=cos(theta);
+                float s=sin(theta);
+                return float3x3(
+                float3(c,0,s),
+                float3(0,1,0),
+                float3(-s,0,c)
+                );
+            }
+
+            // Rotation matrix around the Z axis.
+            float3x3 rotateZ(float theta){
+                float c=cos(theta);
+                float s=sin(theta);
+                return float3x3(
+                float3(c,-s,0),
+                float3(s,c,0),
+                float3(0,0,1)
+                );
+            }
+
+            float3x3 identity(){
+                return float3x3(
+                float3(1,0,0),
+                float3(0,1,0),
+                float3(0,0,1)
+                );
+            }
+            float sdSphere(float3 p,float r)
             {
-                float3 z = pos;
-                float dr = 1.;
-                float r = .1;
+                float3 offset=float3(0,0,-2);
+                return length(p-offset)-r;
+            }
+            float mandelBulb(float3 p,float3x3 transform)
+            {
+                float3 w = mul(transform,p);
+                float m=dot(w,w);
                 
+                float4 trap=float4(abs(w),m);
+                float dz=2.9;
+                float power=8.;
                 
-                
-                // from cartesian to polar
-                float theta = acos (z.z / r);
-                float phi = atan2(z.y, z.x);
-                dr = pow(r, n - 1.) * n * dr + 1.;
-                
-                // scale and rotate the point
-                float zr = pow (r, n);
-                theta = theta * n;
-                phi = phi * n;
-                
-                // back to cartesian
-                z = zr * float3(sin(theta)*cos(phi), sin(theta)*sin(phi), cos(theta));
-                z += pos;
-                return .5 * log (r) * r / dr; // I just don't get this distance estimator here
+                for(int i=0;i<4;i++)
+                {
+                    // dz = 8*z^7*dz
+                    dz=power*pow(m,3.5)*dz + 1.9;
+                    
+                    // z = z^8+z
+                    float r=length(w);
+                    // rotateX(w);
+                    float b=_Power*acos(w.y/r)+_Time.y;
+                    float a=_Power*atan2(w.x,w.z) + _Time.y;
+                    w=p+pow(r,power)*float3(sin(b)*sin(a),cos(b),sin(b)*cos(a));
+                    //w *= abs(sin(b)*cos(a)*log(2. * abs(cos(a))))+.8;
+                    //w *= abs(tan(a) * sin(a) * abs(sin(a))) * .4 * abs(sin(a)) * sin(cos(b)) * abs(cos(a)) + .6;
+                    //w = mod(u_time,w.x);
+                    trap=min(trap,float4(abs(w),m));
+                    
+                    m=dot(w,w) ;
+                    if(m>256.)
+                    break;
+                }
+                // distance estimation (through the Hubbard-Douady potential)
+                return .025*log(m)*sqrt(m)/dz * 5;
             }
 
             
 
             float Raymarch(float3 ro, float3 rd)
             {
-                float dO = 0;
-                float dS;
-                for(int i = 0; i < MAX_STEPS; i++)
-                {
-                    float3 p = ro + dO * rd;
-                    dS = GetDist(p);
-                    dO += dS;
-                    if(dS < SURF_DIST || dO > MAX_DIST) break;
+                float depth=.2;
+                int iteration = 0;
+                
+                for(int i=0;i<MAX_STEPS;i++){
+                    iteration = i;
+                    float3 p=ro+depth*rd;
+                    //float d=sdSphere(p,1.);
+                    float d=mandelBulb(p,mul(mul(rotateX(90),rotateY(_Time.y/10.)),identity()));
+                    depth+=d;
+                    if(d<PRECISION||depth>MAX_DIST)break;
                 }
-                return dO;
+                
+                return float2(depth,iteration);
             }
 
-            float3 GetNormal(float3 p)
+            float3 calcNormal(float3 p)
             {
-                float2 e = float2(1e-2,0);
-                float3 n = GetDist(p) - float3(
-                GetDist(p - e.xyy),
-                GetDist(p - e.yxy),
-                GetDist(p - e.yyx)
-                );
-                return normalize(n);
+                float2 e=float2(2.,2.)*.000001;// epsilon
+                float r=1.;// radius of sphere
+                return normalize(
+                e.xyy*mandelBulb(p+e.xxx,identity())+
+                e.yyx*mandelBulb(p+e.xxx,identity())+
+                e.yxy*mandelBulb(p+e.xxx,identity())+
+                e.xxx*mandelBulb(p+e.xxx,identity()));
             }
 
-            fixed4 frag (v2f i) : SV_Target
+            float4 frag (v2f i) : SV_Target
             {
                 float2 uv = i.uv - .5;
-                float3 ro = i.ro;
-                float3 rd = normalize(i.hitPos - ro);
-                float d = Raymarch(ro,rd);
 
-                fixed4 col = 0;
-                //col.rgb = rd;
-                if(d < MAX_DIST)
-                {
-                    float3 p = ro + rd * d;
-                    float3 n = mandelbulb(p,8);
-                    col.rgb = n;
+                uv *= float2(2.,2.);
+                float3 ro = float3(0,0,3);
+                float3 rd = normalize(float3(uv.xy, -1));
+
+                float2 rmComponents = Raymarch(ro,rd);
+                float d = rmComponents.x;
+                float ite = float(rmComponents.y);
+
+                float multiplier = ite /MAX_STEPS;
+
+                float3 col = tex2D(_MainTex,i.uv);
+                
+                if(d>MAX_DIST){
+                    col=_BackgroundColor * multiplier * 5;// ray didn't hit anything
                 }
-                else
-                discard;
-                // sample the texture
+                else{
+                    float3 p=ro+rd*d;// point on sphere we discovered from ray marching
+                    float3 normal=calcNormal(p-rd);
+                    float3 lightPosition=float3(1.,.5,2.2);
+                    float3 lightDirection=normalize(lightPosition-p);
+                    
+                    // Calculate diffuse reflection by taking the dot product of
+                    // the normal and the light direction.
+                    float dif=clamp(dot(normal,lightDirection),0.,1.);
+                    //shadow
+                    float3 newRayOrigin=p;
+                    float shadowRayLength=Raymarch(newRayOrigin,lightDirection).x;// cast shadow ray to the light source
+                    if(shadowRayLength<length(lightPosition-newRayOrigin))dif*=.8;// if the shadow ray hits the sphere, set the diffuse reflection to zero, simulating a shadow
+                    col=float3(dif.xxx)*_MandelColor*pow(.1 - d,4.) *  multiplier * 3;
+                }
                 
-                
-                return col;
+                return float4(col.xyz,1);
             }
             ENDCG
         }
