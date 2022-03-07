@@ -3,9 +3,22 @@ Shader "Unlit/Raymarch"
     Properties
     {
         _MainTex ("Texture", 2D) = "white" {}
+        [Header(COLOR SECTION)]
+        [Space(10)]
+
         _MandelColor ("MandelColor", Color) = (1, 1, 1, 1)
         _BackgroundColor ("BackgroundColor", Color) = (1, 1, 1, 1)
+
+        [Header(Parameters)]
+        [Space(10)]
+        [PowerSlider(10.0)] _Zoom ("Zoom", Range (1, 4)) = 1.0
         [PowerSlider(10.0)] _Power ("Power", Range (0.01, 20)) = 1.0
+        _Iteration("Iteration count", Range(1,20)) = 1.0
+        _Outline("Outline", Range(1,10)) = 1.0
+
+
+        [Toggle] _EnableSpeed ("Enable ?", Float) = 0
+        [PowerSlider(1.0)] _Speed ("Speed", Range (0, 1)) = 1.0
 
     }
     SubShader
@@ -18,15 +31,15 @@ Shader "Unlit/Raymarch"
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
-            // make fog work
-            #pragma multi_compile_fog
+            
+            #pragma shader_feature _ENABLESPEED_ON
 
             #include "UnityCG.cginc"
 
             #define MAX_STEPS 200
             #define MIN_DIST .001
-            #define MAX_DIST 30.
-            #define PRECISION .0008
+            #define MAX_DIST 12.
+            #define PRECISION .00005
 
             
             sampler2D _MainTex;
@@ -34,6 +47,10 @@ Shader "Unlit/Raymarch"
             float4 _MandelColor;
             float4 _BackgroundColor;
             float _Power;
+            float _Speed;
+            int _Iteration;
+            float _Outline;
+            float _Zoom;
             struct appdata
             {
                 float4 vertex : POSITION;
@@ -108,21 +125,25 @@ Shader "Unlit/Raymarch"
                 float m=dot(w,w);
                 
                 float4 trap=float4(abs(w),m);
-                float dz=2.9;
+                float dz=1.;
                 float power=8.;
                 
-                for(int i=0;i<4;i++)
+                for(int i=0;i<_Iteration;i++)
                 {
                     // dz = 8*z^7*dz
                     dz=power*pow(m,3.5)*dz + 1.9;
                     
                     // z = z^8+z
                     float r=length(w);
-                    // rotateX(w);
-                    float b=_Power*acos(w.y/r)+_Time.y;
-                    float a=_Power*atan2(w.x,w.z) + _Time.y;
+                    #if _ENABLESPEED_ON
+                        float b=_Power*acos(w.y/r)+_Time.y/(1.1-_Speed);
+                        float a=_Power*atan2(w.x,w.z) + _Time.y/(1.1-_Speed);
+                    #else
+                        float b=_Power*acos(w.y/r);
+                        float a=_Power*atan2(w.z,w.x);
+                    #endif
                     w=p+pow(r,power)*float3(sin(b)*sin(a),cos(b),sin(b)*cos(a));
-                    //w *= abs(sin(b)*cos(a)*log(2. * abs(cos(a))))+.8;
+                    //w *= abs(sin(b)*cos(a)*log2(2. * abs(cos(a))))+.8;
                     //w *= abs(tan(a) * sin(a) * abs(sin(a))) * .4 * abs(sin(a)) * sin(cos(b)) * abs(cos(a)) + .6;
                     //w = mod(u_time,w.x);
                     trap=min(trap,float4(abs(w),m));
@@ -132,14 +153,14 @@ Shader "Unlit/Raymarch"
                     break;
                 }
                 // distance estimation (through the Hubbard-Douady potential)
-                return .025*log(m)*sqrt(m)/dz * 5;
+                return .035*log2(m)*(sqrt(m)/dz) *_Outline/4;
             }
 
             
 
             float Raymarch(float3 ro, float3 rd)
             {
-                float depth=.2;
+                float depth=0.2;
                 int iteration = 0;
                 
                 for(int i=0;i<MAX_STEPS;i++){
@@ -169,20 +190,20 @@ Shader "Unlit/Raymarch"
             {
                 float2 uv = i.uv - .5;
 
-                uv *= float2(2.,2.);
+                uv *= float2(_Zoom,_Zoom);
                 float3 ro = float3(0,0,3);
                 float3 rd = normalize(float3(uv.xy, -1));
 
                 float2 rmComponents = Raymarch(ro,rd);
                 float d = rmComponents.x;
-                float ite = float(rmComponents.y);
+                float ite = rmComponents.y;
 
-                float multiplier = ite /MAX_STEPS;
-
+                float multiplier = pow(ite/MAX_STEPS,.9) * 1.5;
+                //float multiplier = pow(ite/float(MAX_STEPS),2.5) * 2000.5;
                 float3 col = tex2D(_MainTex,i.uv);
                 
                 if(d>MAX_DIST){
-                    col=_BackgroundColor * multiplier * 5;// ray didn't hit anything
+                    col=_BackgroundColor;// ray didn't hit anything
                 }
                 else{
                     float3 p=ro+rd*d;// point on sphere we discovered from ray marching
@@ -197,7 +218,7 @@ Shader "Unlit/Raymarch"
                     float3 newRayOrigin=p;
                     float shadowRayLength=Raymarch(newRayOrigin,lightDirection).x;// cast shadow ray to the light source
                     if(shadowRayLength<length(lightPosition-newRayOrigin))dif*=.8;// if the shadow ray hits the sphere, set the diffuse reflection to zero, simulating a shadow
-                    col=float3(dif.xxx)*_MandelColor*pow(.1 - d,4.) *  multiplier * 3;
+                    col=float3(dif.xxx)*_MandelColor*pow(.2 - d,2.)/1.5 *  multiplier *10.5;
                 }
                 
                 return float4(col.xyz,1);
